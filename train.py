@@ -1,369 +1,234 @@
-import argparse
-import torch
-import time
-from pathlib import Path
-import tqdm
-import json
-import sklearn.preprocessing
-import numpy as np
-import random
-from git import Repo
 import os
-import copy
-import torchaudio
+from argparse import ArgumentParser, Namespace
 
-from openunmix import data
-from openunmix import model
-from openunmix import utils
-from openunmix import transforms
+import torch
+import wandb
+from torch import nn
 
-tqdm.monitor_interval = 0
-
-
-def train(args, unmix, encoder, device, train_sampler, optimizer):
-    losses = utils.AverageMeter()
-    unmix.train()
-    pbar = tqdm.tqdm(train_sampler, disable=args.quiet)
-    for x, y in pbar:
-        pbar.set_description("Training batch")
-        x, y = x.to(device), y.to(device)
-        optimizer.zero_grad()
-        X = encoder(x)
-        Y_hat = unmix(X)
-        Y = encoder(y)
-        loss = torch.nn.functional.mse_loss(Y_hat, Y)
-        loss.backward()
-        optimizer.step()
-        losses.update(loss.item(), Y.size(1))
-        pbar.set_postfix(loss="{:.3f}".format(losses.avg))
-    return losses.avg
+from src.constants import PROJECT_NAME, CHECKPOINT_DIR, CONFIG_FILE
+from src.dataset import MUSDBDataset
+from src.model import OpenUnmix
+from src.optimization import get_lr_scheduler
+from src.trainer import Trainer
+from src.transforms import AudioEncoder
+from src.utils import set_random_seeds, get_time, read_json, save_json, bandwidth_to_max_bin
 
 
-def valid(args, unmix, encoder, device, valid_sampler):
-    losses = utils.AverageMeter()
-    unmix.eval()
-    with torch.no_grad():
-        for x, y in valid_sampler:
-            x, y = x.to(device), y.to(device)
-            X = encoder(x)
-            Y_hat = unmix(X)
-            Y = encoder(y)
-            loss = torch.nn.functional.mse_loss(Y_hat, Y)
-            losses.update(loss.item(), Y.size(1))
-        return losses.avg
+def parse_arguments() -> Namespace:
+    parser = ArgumentParser(description='Train source seperation model')
 
-
-def get_statistics(args, encoder, dataset):
-    encoder = copy.deepcopy(encoder).to("cpu")
-    scaler = sklearn.preprocessing.StandardScaler()
-
-    dataset_scaler = copy.deepcopy(dataset)
-    if isinstance(dataset_scaler, data.SourceFolderDataset):
-        dataset_scaler.random_chunks = False
-    else:
-        dataset_scaler.random_chunks = False
-        dataset_scaler.seq_duration = None
-
-    dataset_scaler.samples_per_track = 1
-    dataset_scaler.augmentations = None
-    dataset_scaler.random_track_mix = False
-    dataset_scaler.random_interferer_mix = False
-
-    pbar = tqdm.tqdm(range(len(dataset_scaler)), disable=args.quiet)
-    for ind in pbar:
-        x, y = dataset_scaler[ind]
-        pbar.set_description("Compute dataset statistics")
-        # downmix to mono channel
-        X = encoder(x[None, ...]).mean(1, keepdim=False).permute(0, 2, 1)
-
-        scaler.partial_fit(np.squeeze(X))
-
-    # set inital input scaler values
-    std = np.maximum(scaler.scale_, 1e-4 * np.max(scaler.scale_))
-    return scaler.mean_, std
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Open Unmix Trainer")
-
-    # which target do we want to train?
+    # dataset setting
     parser.add_argument(
-        "--target",
+        '--data',
         type=str,
-        default="vocals",
-        help="target source (will be passed to the dataset)",
+        default='musdb18',
+        help='root path of dataset'
     )
-
-    # Dataset paramaters
     parser.add_argument(
-        "--dataset",
+        '--target',
         type=str,
-        default="musdb",
-        choices=[
-            "musdb",
-            "aligned",
-            "sourcefolder",
-            "trackfolder_var",
-            "trackfolder_fix",
-        ],
-        help="Name of the dataset.",
+        default='vocals',
+        help='target source (will be passed to the dataset)',
     )
-    parser.add_argument("--root", type=str, help="root path of dataset")
     parser.add_argument(
-        "--output",
-        type=str,
-        default="open-unmix",
-        help="provide output path base folder name",
-    )
-    parser.add_argument("--model", type=str, help="Name or path of pretrained model to fine-tune")
-    parser.add_argument("--checkpoint", type=str, help="Path of checkpoint to resume training")
-    parser.add_argument(
-        "--audio-backend",
-        type=str,
-        default="soundfile",
-        help="Set torchaudio backend (`sox_io` or `soundfile`",
-    )
-
-    # Training Parameters
-    parser.add_argument("--epochs", type=int, default=1000)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--lr", type=float, default=0.001, help="learning rate, defaults to 1e-3")
-    parser.add_argument(
-        "--patience",
+        '--samples_per_track',
         type=int,
-        default=140,
-        help="maximum number of train epochs (default: 140)",
+        default=64,
     )
     parser.add_argument(
-        "--lr-decay-patience",
+        '--source_augmentations',
+        type=str,
+        default=['gain', 'channelswap'],
+        nargs='+'
+    )
+    parser.add_argument(
+        '--num_workers',
         type=int,
-        default=80,
-        help="lr decay patience for plateau scheduler",
+        default=4,
+        help='Number of workers for dataloader.',
     )
+    
+    # model setting
     parser.add_argument(
-        "--lr-decay-gamma",
-        type=float,
-        default=0.3,
-        help="gamma of learning rate scheduler decay",
-    )
-    parser.add_argument("--weight-decay", type=float, default=0.00001, help="weight decay")
-    parser.add_argument(
-        "--seed", type=int, default=42, metavar="S", help="random seed (default: 42)"
-    )
-
-    # Model Parameters
-    parser.add_argument(
-        "--seq-dur",
+        '--seq_dur',
         type=float,
         default=6.0,
-        help="Sequence duration in seconds" "value of <=0.0 will use full/variable length",
+        help='Sequence duration in seconds' 'value of <=0.0 will use full/variable length',
     )
     parser.add_argument(
-        "--unidirectional",
-        action="store_true",
+        '--unidirectional',
+        action='store_true',
         default=False,
-        help="Use unidirectional LSTM",
+        help='Use unidirectional LSTM',
     )
-    parser.add_argument("--nfft", type=int, default=4096, help="STFT fft size and window size")
-    parser.add_argument("--nhop", type=int, default=1024, help="STFT hop size")
     parser.add_argument(
-        "--hidden-size",
+        '--nfft',
+        type=int,
+        default=4096,
+        help='STFT fft size and window size'
+    )
+    parser.add_argument(
+        '--nhop',
+        type=int,
+        default=1024,
+        help='STFT hop size'
+    )
+    parser.add_argument(
+        '--hidden-size',
         type=int,
         default=512,
-        help="hidden size parameter of bottleneck layers",
+        help='hidden size parameter of bottleneck layers',
     )
     parser.add_argument(
-        "--bandwidth", type=int, default=16000, help="maximum model bandwidth in herz"
+        '--bandwidth',
+        type=int,
+        default=16000,
+        help='maximum model bandwidth in herz',
     )
     parser.add_argument(
-        "--nb-channels",
+        '--num_channels',
         type=int,
         default=2,
-        help="set number of channels for model (1, 2)",
+        help='set number of channels for model (1, 2)',
+    )
+
+    # training setting
+    parser.add_argument(
+        '--epochs',
+        type=int,
+        default=150,
     )
     parser.add_argument(
-        "--nb-workers", type=int, default=0, help="Number of workers for dataloader."
+        '--batch_size',
+        type=int,
+        default=16,
     )
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Speed up training init for dev purposes",
-    )
-
-    # Misc Parameters
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        default=False,
-        help="less verbose during training",
+        '--lr',
+        type=float,
+        default=1e-3,
     )
     parser.add_argument(
-        "--no-cuda", action="store_true", default=False, help="disables CUDA training"
+        '--weight_decay',
+        type=float,
+        default=1e-5,
+    )
+    parser.add_argument(
+        '--lr_scheduler',
+        type=str,
+        default='one_cycle',
     )
 
-    args, _ = parser.parse_known_args()
+    return parser.parse_args()
 
-    torchaudio.set_audio_backend(args.audio_backend)
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    print("Using GPU:", use_cuda)
-    dataloader_kwargs = {"num_workers": args.nb_workers, "pin_memory": True} if use_cuda else {}
 
-    repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    repo = Repo(repo_dir)
-    commit = repo.head.commit.hexsha[:7]
+if __name__ == '__main__':
+    set_random_seeds()
+    args = parse_arguments()
+    checkpoint_dir = os.path.join(CHECKPOINT_DIR, get_time())
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # use jpg or npy
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-
-    device = torch.device("cuda" if use_cuda else "cpu")
-
-    train_dataset, valid_dataset, args = data.load_datasets(parser, args)
-
-    # create output dir if not exist
-    target_path = Path(args.output)
-    target_path.mkdir(parents=True, exist_ok=True)
-
-    train_sampler = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True, **dataloader_kwargs
+    # Prepare dataset
+    train_set = MUSDBDataset(
+        root=args.data,
+        subsets='train',
+        split='train',
+        samples_per_track=args.samples_per_track,
+        seq_duration=args.seq_dur,
+        source_augmentations=args.source_augmentations,
+        random_track_mix=True,
+        is_wav=True,
+        target=args.target,
     )
-    valid_sampler = torch.utils.data.DataLoader(valid_dataset, batch_size=1, **dataloader_kwargs)
-
-    stft, _ = transforms.make_filterbanks(
-        n_fft=args.nfft, n_hop=args.nhop, sample_rate=train_dataset.sample_rate
+    train_loader = train_set.get_loader(
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
     )
-    encoder = torch.nn.Sequential(stft, model.ComplexNorm(mono=args.nb_channels == 1)).to(device)
-
-    separator_conf = {
-        "nfft": args.nfft,
-        "nhop": args.nhop,
-        "sample_rate": train_dataset.sample_rate,
-        "nb_channels": args.nb_channels,
-    }
-
-    with open(Path(target_path, "separator.json"), "w") as outfile:
-        outfile.write(json.dumps(separator_conf, indent=4, sort_keys=True))
-
-    if args.checkpoint or args.model or args.debug:
-        scaler_mean = None
-        scaler_std = None
-    else:
-        scaler_mean, scaler_std = get_statistics(args, encoder, train_dataset)
-
-    max_bin = utils.bandwidth_to_max_bin(train_dataset.sample_rate, args.nfft, args.bandwidth)
-
-    if args.model:
-        # fine tune model
-        print(f"Fine-tuning model from {args.model}")
-        unmix = utils.load_target_models(
-            args.target, model_str_or_path=args.model, device=device, pretrained=True
-        )[args.target]
-        unmix = unmix.to(device)
-    else:
-        unmix = model.OpenUnmix(
-            input_mean=scaler_mean,
-            input_scale=scaler_std,
-            nb_bins=args.nfft // 2 + 1,
-            nb_channels=args.nb_channels,
-            hidden_size=args.hidden_size,
-            max_bin=max_bin,
-            unidirectional=args.unidirectional
-        ).to(device)
-
-    optimizer = torch.optim.Adam(unmix.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        factor=args.lr_decay_gamma,
-        patience=args.lr_decay_patience,
-        cooldown=10,
+    valid_set = MUSDBDataset(
+        root=args.data,
+        subsets='train',
+        split='valid',
+        samples_per_track=1,
+        seq_duration=None,
+        is_wav=True,
+        target=args.target,
+    )
+    valid_loader = valid_set.get_loader(
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
     )
 
-    es = utils.EarlyStopping(patience=args.patience)
+    # Prepare training
+    device = torch.device(f'cuda:0'if torch.cuda.is_available() else 'cpu')
+    encoder = AudioEncoder(
+        n_fft=args.nfft,
+        n_hop=args.nhop,
+        sample_rate=train_set.sample_rate,
+        num_channels=args.num_channels,
+    )
 
-    # if a checkpoint is specified: resume training
-    if args.checkpoint:
-        model_path = Path(args.checkpoint).expanduser()
-        with open(Path(model_path, args.target + ".json"), "r") as stream:
-            results = json.load(stream)
+    train_data_stats = train_set.get_stats(encoder)
+    max_bin = bandwidth_to_max_bin(train_set.sample_rate, args.nfft, args.bandwidth)
+    nb_bins = args.nfft // 2 + 1
 
-        target_model_path = Path(model_path, args.target + ".chkpnt")
-        checkpoint = torch.load(target_model_path, map_location=device)
-        unmix.load_state_dict(checkpoint["state_dict"], strict=False)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        scheduler.load_state_dict(checkpoint["scheduler"])
-        # train for another epochs_trained
-        t = tqdm.trange(
-            results["epochs_trained"],
-            results["epochs_trained"] + args.epochs + 1,
-            disable=args.quiet,
-        )
-        train_losses = results["train_loss_history"]
-        valid_losses = results["valid_loss_history"]
-        train_times = results["train_time_history"]
-        best_epoch = results["best_epoch"]
-        es.best = results["best_loss"]
-        es.num_bad_epochs = results["num_bad_epochs"]
-    # else start optimizer from scratch
-    else:
-        t = tqdm.trange(1, args.epochs + 1, disable=args.quiet)
-        train_losses = []
-        valid_losses = []
-        train_times = []
-        best_epoch = 0
+    save_json(
+        vars(args) | {
+            'nb_bins': nb_bins,
+            'max_bin': int(max_bin),
+            'sample_rate': MUSDBDataset.sample_rate,
+            'train_data_mean': train_data_stats['mean'].tolist(),
+            'train_data_std': train_data_stats['std'].tolist(),
+        },
+        os.path.join(checkpoint_dir, CONFIG_FILE)
+    )
 
-    for epoch in t:
-        t.set_description("Training epoch")
-        end = time.time()
-        train_loss = train(args, unmix, encoder, device, train_sampler, optimizer)
-        valid_loss = valid(args, unmix, encoder, device, valid_sampler)
-        scheduler.step(valid_loss)
-        train_losses.append(train_loss)
-        valid_losses.append(valid_loss)
+    model = OpenUnmix(
+        input_mean=train_data_stats['mean'],
+        input_scale=train_data_stats['std'],
+        nb_bins=nb_bins,
+        nb_channels=args.num_channels,
+        hidden_size=args.hidden_size,
+        max_bin=max_bin,
+        unidirectional=args.unidirectional,
+    )
 
-        t.set_postfix(train_loss=train_loss, val_loss=valid_loss)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay
+    )
+    lr_scheduler = get_lr_scheduler(
+        name=args.lr_scheduler,
+        optimizer=optimizer,
+        max_lr=args.lr,
+        steps_for_one_epoch=len(train_loader),
+        epochs=args.epochs,
+    )
 
-        stop = es.step(valid_loss)
+    # Prepare logger
+    wandb.init(
+        project=PROJECT_NAME,
+        name=os.path.basename(checkpoint_dir),
+        config=vars(args),
+    )
+    wandb.watch(model, log='all')
 
-        if valid_loss == es.best:
-            best_epoch = epoch
-
-        utils.save_checkpoint(
-            {
-                "epoch": epoch + 1,
-                "state_dict": unmix.state_dict(),
-                "best_loss": es.best,
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-            },
-            is_best=valid_loss == es.best,
-            path=target_path,
-            target=args.target,
-        )
-
-        # save params
-        params = {
-            "epochs_trained": epoch,
-            "args": vars(args),
-            "best_loss": es.best,
-            "best_epoch": best_epoch,
-            "train_loss_history": train_losses,
-            "valid_loss_history": valid_losses,
-            "train_time_history": train_times,
-            "num_bad_epochs": es.num_bad_epochs,
-            "commit": commit,
-        }
-
-        with open(Path(target_path, args.target + ".json"), "w") as outfile:
-            outfile.write(json.dumps(params, indent=4, sort_keys=True))
-
-        train_times.append(time.time() - end)
-
-        if stop:
-            print("Apply Early Stopping")
-            break
-
-
-if __name__ == "__main__":
-    main()
+    # Start training
+    trainer = Trainer(
+        encoder=encoder,
+        model=model,
+        device=device,
+        train_loader=train_loader,
+        valid_loader=valid_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        accum_grad_step=1,
+        clip_grad_norm=1.0,
+        logger=wandb,
+        checkpoint_dir=checkpoint_dir,
+    )
+    trainer.fit(epochs=args.epochs)

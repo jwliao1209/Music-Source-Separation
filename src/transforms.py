@@ -214,3 +214,14 @@ class ComplexNorm(nn.Module):
             spec = torch.mean(spec, 1, keepdim=True)
 
         return spec
+
+
+class AudioEncoder(nn.Module):
+    def __init__(self, n_fft, n_hop, sample_rate, num_channels):
+        super(AudioEncoder, self).__init__()
+        self.stft = TorchSTFT(n_fft=n_fft, n_hop=n_hop)
+        self.complex_norm = ComplexNorm(mono=num_channels == 1)
+
+    @torch.no_grad()
+    def forward(self, x):
+        return self.complex_norm(self.stft(x))
