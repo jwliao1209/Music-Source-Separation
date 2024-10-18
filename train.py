@@ -3,15 +3,16 @@ from argparse import ArgumentParser, Namespace
 
 import torch
 import wandb
-from torch import nn
 
 from src.constants import PROJECT_NAME, CHECKPOINT_DIR, CONFIG_FILE
 from src.dataset import MUSDBDataset
-from src.model import OpenUnmix
-from src.optimization import get_lr_scheduler
+from src.loss import get_loss
+from src.model import get_model
+from src.optim.optimizer import get_optimizer
+from src.optim.lr_scheduler import get_lr_scheduler
 from src.trainer import Trainer
 from src.transforms import AudioEncoder
-from src.utils import set_random_seeds, get_time, read_json, save_json, bandwidth_to_max_bin
+from src.utils import set_random_seeds, get_time, save_json, bandwidth_to_max_bin
 
 
 def parse_arguments() -> Namespace:
@@ -49,6 +50,14 @@ def parse_arguments() -> Namespace:
     )
     
     # model setting
+    parser.add_argument(
+        '-m',
+        '--model_type',
+        type=str,
+        default='openunmix',
+        choices=['openunmix', 'openunmix_cnn', 'openunmix_attention', 'openunmix_ssm'],
+        help='model type',
+    )
     parser.add_argument(
         '--seq_dur',
         type=float,
@@ -102,6 +111,18 @@ def parse_arguments() -> Namespace:
         '--batch_size',
         type=int,
         default=16,
+    )
+    parser.add_argument(
+        '--loss',
+        type=str,
+        default='mse',
+        choices=['mse', 'mae', 'smooth_mae'],
+    )
+    parser.add_argument(
+        '--optimizer',
+        type=str,
+        default='adamw',
+        choices=['sgd', 'adam', 'adamw', 'lion'],
     )
     parser.add_argument(
         '--lr',
@@ -161,7 +182,6 @@ if __name__ == '__main__':
     )
 
     # Prepare training
-    device = torch.device(f'cuda:0'if torch.cuda.is_available() else 'cpu')
     encoder = AudioEncoder(
         n_fft=args.nfft,
         n_hop=args.nhop,
@@ -184,19 +204,21 @@ if __name__ == '__main__':
         os.path.join(checkpoint_dir, CONFIG_FILE)
     )
 
-    model = OpenUnmix(
-        input_mean=train_data_stats['mean'],
-        input_scale=train_data_stats['std'],
-        nb_bins=nb_bins,
-        nb_channels=args.num_channels,
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    model =  get_model(
+        name=args.model_type,
+        data_mean=train_data_stats['mean'],
+        data_std=train_data_stats['std'],
+        num_bins=nb_bins,
+        num_channels=args.num_channels,
         hidden_size=args.hidden_size,
         max_bin=max_bin,
         unidirectional=args.unidirectional,
     )
-
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
+    criterion = get_loss(name=args.loss)
+    optimizer = get_optimizer(
+        name=args.optimizer,
+        model=model,
         lr=args.lr,
         weight_decay=args.weight_decay
     )

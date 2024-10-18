@@ -24,6 +24,18 @@ To download the dataset, run the following script:
 bash scripts/download_data.sh
 ```
 
+## Training
+To train the model, run the command:
+```
+python train.py
+```
+
+## Inference
+To inference the model, run the command:
+```
+python inference.py
+```
+
 
 ## Environment
 We implemented the code on an environment running Ubuntu 22.04.1, utilizing a 12th Generation Intel(R) Core(TM) i7-12700 CPU, along with a single NVIDIA GeForce RTX 4090 GPU equipped with 24 GB of dedicated memory.

@@ -1,58 +1,20 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
-import torchaudio
-from torch import Tensor
-import torch.nn as nn
-
-try:
-    from asteroid_filterbanks.enc_dec import Encoder, Decoder
-    from asteroid_filterbanks.transforms import to_torchaudio, from_torchaudio
-    from asteroid_filterbanks import torch_stft_fb
-except ImportError:
-    pass
+from torch import nn
 
 
-def make_filterbanks(n_fft=4096, n_hop=1024, center=False, sample_rate=44100.0, method="torch"):
+def make_filterbanks(
+    n_fft: int = 4096,
+    n_hop: int = 1024,
+    center: bool = False,
+) -> Tuple[nn.Module, nn.Module]:
+
     window = nn.Parameter(torch.hann_window(n_fft), requires_grad=False)
 
-    if method == "torch":
-        encoder = TorchSTFT(n_fft=n_fft, n_hop=n_hop, window=window, center=center)
-        decoder = TorchISTFT(n_fft=n_fft, n_hop=n_hop, window=window, center=center)
-    elif method == "asteroid":
-        fb = torch_stft_fb.TorchSTFTFB.from_torch_args(
-            n_fft=n_fft,
-            hop_length=n_hop,
-            win_length=n_fft,
-            window=window,
-            center=center,
-            sample_rate=sample_rate,
-        )
-        encoder = AsteroidSTFT(fb)
-        decoder = AsteroidISTFT(fb)
-    else:
-        raise NotImplementedError
+    encoder = TorchSTFT(n_fft=n_fft, n_hop=n_hop, window=window, center=center)
+    decoder = TorchISTFT(n_fft=n_fft, n_hop=n_hop, window=window, center=center)
     return encoder, decoder
-
-
-class AsteroidSTFT(nn.Module):
-    def __init__(self, fb):
-        super(AsteroidSTFT, self).__init__()
-        self.enc = Encoder(fb)
-
-    def forward(self, x):
-        aux = self.enc(x)
-        return to_torchaudio(aux)
-
-
-class AsteroidISTFT(nn.Module):
-    def __init__(self, fb):
-        super(AsteroidISTFT, self).__init__()
-        self.dec = Decoder(fb)
-
-    def forward(self, X: Tensor, length: Optional[int] = None) -> Tensor:
-        aux = from_torchaudio(X)
-        return self.dec(aux, length=length)
 
 
 class TorchSTFT(nn.Module):
@@ -86,7 +48,7 @@ class TorchSTFT(nn.Module):
         self.n_hop = n_hop
         self.center = center
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """STFT forward path
         Args:
             x (Tensor): audio waveform of
@@ -97,8 +59,7 @@ class TorchSTFT(nn.Module):
                 last axis is stacked real and imaginary
         """
 
-        shape = x.size()
-        nb_samples, nb_channels, nb_timesteps = shape
+        shape = x.size() # (nb_samples, nb_channels, nb_timesteps)
 
         # pack batch
         x = x.view(-1, shape[-1])
@@ -161,7 +122,7 @@ class TorchISTFT(nn.Module):
         else:
             self.window = window
 
-    def forward(self, X: Tensor, length: Optional[int] = None) -> Tensor:
+    def forward(self, X: torch.Tensor, length: Optional[int] = None) -> torch.Tensor:
         shape = X.size()
         X = X.reshape(-1, shape[-3], shape[-2], shape[-1])
 
@@ -195,7 +156,7 @@ class ComplexNorm(nn.Module):
         super(ComplexNorm, self).__init__()
         self.mono = mono
 
-    def forward(self, spec: Tensor) -> Tensor:
+    def forward(self, spec: torch.Tensor) -> torch.Tensor:
         """
         Args:
             spec: complex_tensor (Tensor): Tensor shape of

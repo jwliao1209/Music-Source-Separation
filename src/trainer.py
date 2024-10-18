@@ -49,23 +49,23 @@ class Trainer:
         print(self)
 
     def __repr__(self) -> str:
-        tab = " " * 2
+        tab = ' ' * 2
         return (
-            f"{self.__class__.__name__}(\n"
-            f" model={self.model},\n"
-            f" device={self.device},\n"
-            f" train_num={len(self.train_loader)},\n"
-            f" valid_num={len(self.valid_loader)},\n"
-            f" optimizer={self.optimizer},\n"
-            f" train_batch_size={self.train_loader.batch_size},\n"
-            f" accum_grad_step={self.accum_grad_step},\n"
-            f" clip_grad_norm={self.clip_grad_norm},\n"
-            f" lr_scheduler={self.lr_scheduler},\n"
-        ).replace("\n", f"\n{tab}").replace(f'\n{tab}P', f'\n{tab}{tab}P') + "\n)"
+            f'{self.__class__.__name__}(\n'
+            f' model={self.model},\n'
+            f' device={self.device},\n'
+            f' train_num={len(self.train_loader)},\n'
+            f' valid_num={len(self.valid_loader)},\n'
+            f' optimizer={self.optimizer},\n'
+            f' train_batch_size={self.train_loader.batch_size},\n'
+            f' accum_grad_step={self.accum_grad_step},\n'
+            f' clip_grad_norm={self.clip_grad_norm},\n'
+            f' lr_scheduler={self.lr_scheduler},\n'
+        ).replace('\n', f'\n{tab}').replace(f'\n{tab}P', f'\n{tab}{tab}P') + '\n)'
 
     def _shared_step(self, batch_data) -> Dict[str, torch.Tensor]:
-        x = self.encoder(batch_data['audio'].to(self.device))
-        y = self.encoder(batch_data['target'].to(self.device))
+        x = self.encoder(batch_data['audio'])
+        y = self.encoder(batch_data['target'])
         outputs = self.model(x)
         loss = self.criterion(outputs, y)
         return {
@@ -82,18 +82,20 @@ class Trainer:
         return self._shared_step(batch_data)
 
     def train_one_epoch(self) -> None:
-        progress_bar = tqdm(self.train_loader, desc=f"Training {self.cur_ep}")
+        progress_bar = tqdm(self.train_loader, desc=f'Training {self.cur_ep}')
         self.model.train()
 
         for step, batch_data in enumerate(progress_bar, start=1):
-            # batch_data = dict_to_device(batch_data, self.device)
+            batch_data = dict_to_device(batch_data, self.device)
 
             with torch.amp.autocast(
-                dtype=torch.bfloat16 if self.device.type == "cuda" \
+                dtype=torch.bfloat16 if self.device.type == 'cuda' \
                     and not self.fp32 else torch.float32,
                 device_type=self.device.type
             ):
                 output = self.train_step(batch_data)
+
+            del batch_data
 
             self.grad_scaler.scale(output['loss'] / self.accum_grad_step).backward()
 
@@ -109,7 +111,7 @@ class Trainer:
                 self.lr_scheduler.step()
 
             record = {
-                f"train_{k}": v.item() if isinstance(v, torch.Tensor) else v
+                f'train_{k}': v.item() if isinstance(v, torch.Tensor) else v
                 for k, v in output.items()
             }
             progress_bar.set_postfix(record)
@@ -118,18 +120,19 @@ class Trainer:
 
     @torch.no_grad()
     def valid_one_epoch(self)-> None:
-        progress_bar = tqdm(self.valid_loader, desc=f"Validation {self.cur_ep}")
+        progress_bar = tqdm(self.valid_loader, desc=f'Validation {self.cur_ep}')
         self.model.eval()
 
         outputs = []
         for _, batch_data in enumerate(progress_bar, start=1):
-            # batch_data = dict_to_device(batch_data, self.device)
+            batch_data = dict_to_device(batch_data, self.device)
             with torch.amp.autocast(
-                dtype=torch.bfloat16 if self.device.type == "cuda" \
+                dtype=torch.bfloat16 if self.device.type == 'cuda' \
                     and not self.fp32 else torch.float32,
                 device_type=self.device.type
             ):
                 output = self.valid_step(batch_data)
+                del batch_data
             outputs.append(output)
 
         progress_bar.close()
@@ -138,10 +141,11 @@ class Trainer:
         self.log({'epoch': self.cur_ep} | record | {'best_loss': self.best_loss})
         print(record)
 
+        self.save(os.path.join(self.checkpoint_dir, f'epoch={self.cur_ep}-loss={loss:.4f}.pth'))
         if record['valid_loss'] < self.best_loss:
             self.best_loss = record['valid_loss']
-        self.save()
-            # print(f'Save best model: epoch={self.cur_ep}, loss={self.best_loss}')
+            self.save(os.path.join(self.checkpoint_dir, CKPT_FILE))
+            print(f'Save best model: epoch={self.cur_ep}, loss={self.best_loss}')
 
     def log(self, record: Dict[str, float]) -> None:
         if self.logger is not None:
@@ -156,15 +160,14 @@ class Trainer:
             self.train_one_epoch()
             self.valid_one_epoch()
 
-    def save(self) -> None:
+    def save(self, path) -> None:
         checkpoint = {
             'epoch': self.cur_ep,
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'lr_scheduler': self.lr_scheduler.state_dict(),
         }
-        save_path = os.path.join(self.checkpoint_dir, CKPT_FILE)
-        torch.save(checkpoint, save_path)
+        torch.save(checkpoint, path)
 
     def load(self, path):
         checkpoint = torch.load(os.path.join(path, CKPT_FILE))

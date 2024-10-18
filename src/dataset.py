@@ -1,19 +1,15 @@
 import random
-from argparse import Namespace
 from copy import deepcopy
-from pathlib import Path
-from typing import Optional, Union, Tuple, List, Any, Callable
+from typing import Optional, List
 
 import numpy as np
 import musdb
 import torch
-import torchaudio
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from src.constants import RANDOM_SEED
-from torchvision.transforms import Compose
 
 
 class MUSDBDataset(Dataset):
