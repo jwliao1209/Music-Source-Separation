@@ -55,7 +55,7 @@ def parse_arguments() -> Namespace:
         '--model_type',
         type=str,
         default='openunmix',
-        choices=['openunmix', 'openunmix_cnn', 'openunmix_attention', 'openunmix_ssm'],
+        choices=['openunmix', 'openunmix_cnn', 'openunmix_attention', 'openunmix_mamba'],
         help='model type',
     )
     parser.add_argument(
@@ -138,6 +138,7 @@ def parse_arguments() -> Namespace:
         '--lr_scheduler',
         type=str,
         default='one_cycle',
+        choices=['step', 'one_cycle', 'cosine_annealing', 'lion'],
     )
 
     return parser.parse_args()

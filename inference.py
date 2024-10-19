@@ -28,20 +28,20 @@ def parse_arguments() -> Namespace:
     )
     parser.add_argument(
         '--checkpoint_path',
-        default='checkpoints/10-18-18-19-00',
+        default='checkpoints/10-19-03-03-49',
         type=str,
         help='path to mode base directory of pretrained models',
     )
     parser.add_argument(
         '--outdir',
         type=str,
-        default='checkpoints/10-18-18-19-00/results',
+        default='checkpoints/10-19-03-03-49/results',
         help='Results path where audio evaluation results are stored',
     )
     parser.add_argument(
         '--evaldir',
         type=str,
-        default='checkpoints/10-18-18-19-00/results',
+        default='checkpoints/10-19-03-03-49/results',
         help='Results path for museval estimates',
     )
     parser.add_argument(

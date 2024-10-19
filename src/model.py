@@ -345,7 +345,7 @@ class OpenUnmixAttention(nn.Module):
         return x.permute(1, 2, 3, 0)
 
 
-class OpenUnmixSSM(nn.Module):
+class OpenUnmixMamba(nn.Module):
     def __init__(
         self,
         nb_bins: int = 4096,
@@ -355,7 +355,7 @@ class OpenUnmixSSM(nn.Module):
         input_scale: Optional[np.ndarray] = None,
         max_bin: Optional[int] = None,
     ):
-        super(OpenUnmixSSM, self).__init__()
+        super(OpenUnmixMamba, self).__init__()
 
         self.nb_output_bins = nb_bins
         self.nb_bins = max_bin if max_bin else self.nb_output_bins
@@ -364,7 +364,7 @@ class OpenUnmixSSM(nn.Module):
         self.fc1 = nn.Linear(self.nb_bins * nb_channels, hidden_size, bias=False)
         self.bn1 = nn.BatchNorm1d(hidden_size)
 
-        self.ssm = zeta.nn.SSM(in_features=hidden_size,dt_rank=8,dim_inner=64,d_state=256,)
+        self.mamba = zeta.nn.MambaBlock(dim=hidden_size)
 
         self.fc2 = nn.Linear(
             in_features=hidden_size * 2,
@@ -416,9 +416,9 @@ class OpenUnmixSSM(nn.Module):
         x = x.reshape(nb_frames, nb_samples, self.hidden_size)
         x = torch.tanh(x) # squash range ot [-1, 1]
 
-        # Apply self attention
-        ssm_out, _ = self.ssm(x)
-        x = torch.cat([x, ssm_out], -1) # cnn skip connection
+        # Apply mamba
+        mamba_out = self.mamba(x.permute(1, 0, 2).contiguous()).permute(1, 0, 2).contiguous()
+        x = torch.cat([x, mamba_out + x], -1)
 
         # first dense stage + batch norm
         x = self.fc2(x.reshape(-1, x.shape[-1]))
@@ -483,8 +483,8 @@ def get_model(
                 hidden_size=hidden_size,
                 max_bin=max_bin,
             )
-        case 'openunmix_ssm':
-            model = OpenUnmixSSM(
+        case 'openunmix_mamba':
+            model = OpenUnmixMamba(
                 input_mean=data_mean,
                 input_scale=data_std,
                 nb_bins=num_bins,
