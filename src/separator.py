@@ -191,7 +191,6 @@ class Separator(nn.Module):
 
     def seperate(self, audio: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         nb_sources = self.nb_targets
-        nb_samples = audio.shape[0]
 
         # getting the STFT of mix:
         # (nb_samples, nb_channels, nb_bins, nb_frames, 2)
@@ -201,7 +200,7 @@ class Separator(nn.Module):
         # initializing spectrograms variable
         spectrograms = torch.zeros(X.shape + (nb_sources,), dtype=audio.dtype, device=X.device)
 
-        for j, (target_name, target_module) in enumerate(self.target_models.items()):
+        for j, (_, target_module) in enumerate(self.target_models.items()):
             # apply current model to get the source spectrogram
             target_spectrogram = target_module(X.detach().clone())
             spectrograms[..., j] = target_spectrogram
@@ -214,9 +213,6 @@ class Separator(nn.Module):
         nonvocals_spectrogram = mix_magnitude - vocals_spectrogram
 
         nb_channels = vocals_spectrogram.shape[1]
-        
-        
-        estimated_nonvocals = []
 
         # Inverse transform for vocals
         estimated_vocals = []
@@ -233,8 +229,9 @@ class Separator(nn.Module):
                 )
             )
         estimated_vocals = np.stack(estimated_vocals, axis=1)
-            
+
         # Inverse transform for nonvocals
+        estimated_nonvocals = []
         for c in range(nb_channels):
             estimated_nonvocals.append(
                 librosa.griffinlim(
@@ -249,7 +246,12 @@ class Separator(nn.Module):
             )
         estimated_nonvocals = np.stack(estimated_nonvocals, axis=1)
 
-        return estimated_vocals, estimated_nonvocals
+        estimates = {
+            'vocals': estimated_vocals,
+            'accompaniment': estimated_nonvocals,
+        }
+
+        return estimates
 
 
 def load_separator(
@@ -259,13 +261,11 @@ def load_separator(
     residual: bool = False,
     wiener_win_len: Optional[int] = 300,
     device: Union[str, torch.device] = "cpu",
-    pretrained: bool = True,
     filterbank: str = "torch",
     freeze=True,
 ) -> Separator:
 
     checkpoint = torch.load(os.path.join(checkpoint_path, CKPT_FILE), weights_only=True)['model']
-    device = torch.device(f'cuda:0'if torch.cuda.is_available() else 'cpu')
     config = load_config(os.path.join(checkpoint_path, CONFIG_FILE))
     model = get_model(
         name=config.model_type,

@@ -39,6 +39,10 @@ def set_random_seeds(seed: int = 0) -> None:
     torch.backends.cudnn.allow_tf32 = True
 
 
+def get_device() -> torch.device:
+    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 def dict_to_device(data: Dict[str, List[float]], device: torch.device) -> Dict[str, torch.Tensor]:
     return {k: v.to(device) if not isinstance(v, list) else v for k, v in data.items()}
 

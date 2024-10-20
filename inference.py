@@ -4,12 +4,13 @@ from argparse import ArgumentParser, Namespace
 
 import musdb
 import museval
-import soundfile as sf
+# import soundfile as sf
 import torch
 from tqdm import tqdm
 
 from src.preprocess import preprocess
 from src.separator import load_separator
+from src.utils import get_device
 
 
 def parse_arguments() -> Namespace:
@@ -28,21 +29,9 @@ def parse_arguments() -> Namespace:
     )
     parser.add_argument(
         '--checkpoint_path',
-        default='checkpoints/10-19-03-03-49',
+        default='checkpoints/10-19-21-01-27',
         type=str,
         help='path to mode base directory of pretrained models',
-    )
-    parser.add_argument(
-        '--outdir',
-        type=str,
-        default='checkpoints/10-19-03-03-49/results',
-        help='Results path where audio evaluation results are stored',
-    )
-    parser.add_argument(
-        '--evaldir',
-        type=str,
-        default='checkpoints/10-19-03-03-49/results',
-        help='Results path for museval estimates',
     )
     parser.add_argument(
         '--root',
@@ -84,14 +73,14 @@ if __name__ == '__main__':
     args = parse_arguments()
 
     mus = musdb.DB(
-        # root=args.root,
+        root=args.root,
         subsets='test',
-        download=True,
-        is_wav=False,
+        # download=True,
+        is_wav=True,
     )
 
     aggregate_dict = None if args.aggregate is None else json.loads(args.aggregate)
-    device = torch.device(f'cuda:0'if torch.cuda.is_available() else 'cpu')
+    device = get_device()
     results = museval.EvalStore()
     separator = load_separator(
         checkpoint_path=args.checkpoint_path,
@@ -100,7 +89,6 @@ if __name__ == '__main__':
         residual=args.residual,
         wiener_win_len=args.wiener_win_len,
         device=device,
-        pretrained=True,
     )
 
     for track in tqdm(mus.tracks):
@@ -108,31 +96,29 @@ if __name__ == '__main__':
         audio = preprocess(audio, track.rate, separator.sample_rate)
 
         # Task 1
-        if args.task == 1:
-            estimates = separator(audio)
-            estimates = separator.to_dict(estimates, aggregate_dict=aggregate_dict)
+        match args.task:
+            case 1:
+                estimates = separator(audio)
+                estimates = separator.to_dict(estimates, aggregate_dict=aggregate_dict)
 
-            for key in estimates:
-                estimates[key] = estimates[key][0].cpu().detach().numpy().T
+                for key in estimates:
+                    estimates[key] = estimates[key][0].cpu().detach().numpy().T
 
-            if args.outdir:
-                mus.save_estimates(estimates, track, args.outdir)
-        
-        elif args.task == 2:
-            vocal_audio, nonvocal_audio = separator.seperate(audio)
-            estimates = {
-                'vocals': vocal_audio,
-                'accompaniment': nonvocal_audio,
-            }
-            sf.write(f'separated_sample_vocal.wav', vocal_audio, separator.sample_rate)
-            sf.write(f'separated_sample_nonvocal.wav', nonvocal_audio, separator.sample_rate)
+                mus.save_estimates(estimates, track, os.path.join(args.checkpoint_path, 'results'))
+            case 2:
+                estimates = separator.seperate(audio)
+                # sf.write(f'separated_sample_vocal.wav', vocal_audio, separator.sample_rate)
+                # sf.write(f'separated_sample_nonvocal.wav', nonvocal_audio, separator.sample_rate)
 
-
-        scores = museval.eval_mus_track(track, estimates, output_dir=args.evaldir)
+        scores = museval.eval_mus_track(
+            track,
+            estimates,
+            output_dir=os.path.join(args.checkpoint_path, 'results'),
+        )
         results.add_track(scores)
         print(track, '\n', scores)
 
     print(results)
     method = museval.MethodStore()
     method.add_evalstore(results, 'test')
-    method.df.to_csv(os.path.join(args.checkpoint_path, 'test_results.csv'), index=False)
+    method.df.to_csv(os.path.join(args.checkpoint_path, 'results', 'test_results.csv'), index=False)

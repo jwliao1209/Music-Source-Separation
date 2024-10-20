@@ -1,6 +1,6 @@
 # Music Source Separation
 
-This repository contains the implementation for Homework 2 of the CommE5070 Deep Learning for Music Analysis and Generation course, Fall 2024, at National Taiwan University. For a detailed report, please refer to this slides.
+This repository contains the implementation for Homework 2 of the CommE5070 Deep Learning for Music Analysis and Generation course, Fall 2024, at National Taiwan University. For a detailed report, please refer to this [slides](https://docs.google.com/presentation/d/17R2Lj_37S_nfkOQE_zHsyDJTN8SrtzkPkNXv0no6mHE/edit?usp=sharing).
 
 
 ## Setup

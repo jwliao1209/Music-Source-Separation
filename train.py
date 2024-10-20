@@ -1,7 +1,6 @@
 import os
 from argparse import ArgumentParser, Namespace
 
-import torch
 import wandb
 
 from src.constants import PROJECT_NAME, CHECKPOINT_DIR, CONFIG_FILE
@@ -12,7 +11,13 @@ from src.optim.optimizer import get_optimizer
 from src.optim.lr_scheduler import get_lr_scheduler
 from src.trainer import Trainer
 from src.transforms import AudioEncoder
-from src.utils import set_random_seeds, get_time, save_json, bandwidth_to_max_bin
+from src.utils import (
+    set_random_seeds,
+    get_device,
+    get_time,
+    save_json,
+    bandwidth_to_max_bin
+)
 
 
 def parse_arguments() -> Namespace:
@@ -162,11 +167,6 @@ if __name__ == '__main__':
         is_wav=True,
         target=args.target,
     )
-    train_loader = train_set.get_loader(
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-    )
     valid_set = MUSDBDataset(
         root=args.data,
         subsets='train',
@@ -175,6 +175,11 @@ if __name__ == '__main__':
         seq_duration=None,
         is_wav=True,
         target=args.target,
+    )
+    train_loader = train_set.get_loader(
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
     )
     valid_loader = valid_set.get_loader(
         batch_size=1,
@@ -205,7 +210,7 @@ if __name__ == '__main__':
         os.path.join(checkpoint_dir, CONFIG_FILE)
     )
 
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = get_device()
     model =  get_model(
         name=args.model_type,
         data_mean=train_data_stats['mean'],
