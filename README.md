@@ -60,12 +60,9 @@ If you use this code, please cite the following:
 ```
 ```bibtex
 @article{stoter2019open,
-  title={Open-unmix-a reference implementation for music source separation},
-  author={St{\"o}ter, Fabian-Robert and Uhlich, Stefan and Liutkus, Antoine and Mitsufuji, Yuki},
-  journal={Journal of Open Source Software},
-  volume={4},
-  number={41},
-  pages={1667},
-  year={2019}
+    title   = {Open-unmix-a reference implementation for music source separation},
+    author  = {St{\"o}ter, Fabian-Robert and Uhlich, Stefan and Liutkus, Antoine and Mitsufuji, Yuki},
+    journal = {Journal of Open Source Software},
+    year    = {2019}
 }
 ```
