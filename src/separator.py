@@ -255,7 +255,8 @@ class Separator(nn.Module):
 
 
 def load_separator(
-    checkpoint_path,
+    checkpoint_path: str,
+    weight: str = CKPT_FILE,
     targets: Optional[list] = None,
     niter: int = 1,
     residual: bool = False,
@@ -265,7 +266,7 @@ def load_separator(
     freeze=True,
 ) -> Separator:
 
-    checkpoint = torch.load(os.path.join(checkpoint_path, CKPT_FILE), weights_only=True)['model']
+    checkpoint = torch.load(os.path.join(checkpoint_path, weight), weights_only=True)['model']
     config = load_config(os.path.join(checkpoint_path, CONFIG_FILE))
     model = get_model(
         name=config.model_type,
@@ -277,7 +278,7 @@ def load_separator(
         max_bin=config.max_bin,
         unidirectional=config.unidirectional,
     )
-    model.load_state_dict(checkpoint)
+    model.load_state_dict(checkpoint, strict=False)
     model.to(device)
 
     separator = Separator(

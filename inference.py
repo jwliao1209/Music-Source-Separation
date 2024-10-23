@@ -4,7 +4,6 @@ from argparse import ArgumentParser, Namespace
 
 import musdb
 import museval
-# import soundfile as sf
 import torch
 from tqdm import tqdm
 
@@ -17,21 +16,27 @@ def parse_arguments() -> Namespace:
     parser = ArgumentParser(description='Inference')
     parser.add_argument(
         '--targets',
-        default=['vocals'],
         type=str,
+        default=['vocals'],
         nargs='+',
         help='provide targets to be processed. If none, all available targets will be computed',
     )
     parser.add_argument(
         '--task',
-        default=1,
         type=int,
+        default=1,
     )
     parser.add_argument(
         '--checkpoint_path',
-        default='checkpoints/10-19-21-01-27',
         type=str,
+        default='checkpoints/10-19-21-01-27',
         help='path to mode base directory of pretrained models',
+    )
+    parser.add_argument(
+        '--weight',
+        type=str,
+        default='checkpoint.pth',
+        help='path to model checkpoint',
     )
     parser.add_argument(
         '--root',
@@ -71,6 +76,7 @@ def parse_arguments() -> Namespace:
 
 if __name__ == '__main__':
     args = parse_arguments()
+    save_folder = os.path.join(args.checkpoint_path, args.weight.replace(".pth", ""), f'task{args.task}')
 
     mus = musdb.DB(
         root=args.root,
@@ -84,6 +90,7 @@ if __name__ == '__main__':
     results = museval.EvalStore()
     separator = load_separator(
         checkpoint_path=args.checkpoint_path,
+        weight=args.weight,
         targets=args.targets,
         niter=args.niter,
         residual=args.residual,
@@ -104,21 +111,20 @@ if __name__ == '__main__':
                 for key in estimates:
                     estimates[key] = estimates[key][0].cpu().detach().numpy().T
 
-                mus.save_estimates(estimates, track, os.path.join(args.checkpoint_path, 'results'))
             case 2:
                 estimates = separator.seperate(audio)
-                # sf.write(f'separated_sample_vocal.wav', vocal_audio, separator.sample_rate)
-                # sf.write(f'separated_sample_nonvocal.wav', nonvocal_audio, separator.sample_rate)
 
+        mus.save_estimates(estimates, track, save_folder)
         scores = museval.eval_mus_track(
             track,
             estimates,
-            output_dir=os.path.join(args.checkpoint_path, 'results'),
+            output_dir=save_folder,
         )
         results.add_track(scores)
         print(track, '\n', scores)
 
     print(results)
+
     method = museval.MethodStore()
     method.add_evalstore(results, 'test')
-    method.df.to_csv(os.path.join(args.checkpoint_path, 'results', 'test_results.csv'), index=False)
+    method.df.to_csv(os.path.join(save_folder,'test_results.csv'),index=False)

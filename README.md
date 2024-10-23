@@ -24,16 +24,23 @@ To download the dataset, run the following script:
 bash scripts/download_data.sh
 ```
 
+### Checkpoint
+To download the pre-trained model checkpoints, use the command:
+```
+bash scripts/download_ckpt.sh
+```
+
+
 ## Training
 To train the model, run the command:
 ```
-python train.py
+bash scripts/train.sh
 ```
 
 ## Inference
 To inference the model, run the command:
 ```
-python inference.py
+bash scripts/inference.sh
 ```
 
 
@@ -49,5 +56,16 @@ If you use this code, please cite the following:
     author = {Jia-Wei Liao},
     url    = {https://github.com/jwliao1209/Source-Separation},
     year   = {2024}
+}
+```
+```bibtex
+@article{stoter2019open,
+  title={Open-unmix-a reference implementation for music source separation},
+  author={St{\"o}ter, Fabian-Robert and Uhlich, Stefan and Liutkus, Antoine and Mitsufuji, Yuki},
+  journal={Journal of Open Source Software},
+  volume={4},
+  number={41},
+  pages={1667},
+  year={2019}
 }
 ```

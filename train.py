@@ -44,7 +44,7 @@ def parse_arguments() -> Namespace:
     parser.add_argument(
         '--source_augmentations',
         type=str,
-        default=['gain', 'channelswap'],
+        default=None,
         nargs='+'
     )
     parser.add_argument(

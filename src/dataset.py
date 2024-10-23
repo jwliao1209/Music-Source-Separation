@@ -200,8 +200,8 @@ class Compose(object):
         return audio
 
 
-def aug_from_str(list_of_function_names: list):
-    if list_of_function_names:
+def aug_from_str(list_of_function_names: Optional[List[str]] = None) -> Compose:
+    if list_of_function_names is not None:
         return Compose([globals()["_augment_" + aug] for aug in list_of_function_names])
     else:
         return lambda audio: audio
